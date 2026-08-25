@@ -83,6 +83,11 @@ public:
   static void initialize(); // Startup the I2C coms (brings screen out of reset etc)
   static bool isInitDone();
   // Draw the buffer out to the LCD if any content has changed.
+#ifdef MODEL_TS101
+  // TS101's panel needs the per-byte command path (see OLED.cpp); the shared
+  // bulk Transmit() below leaves it stuck on a partial-screen refresh.
+  static void refresh();
+#else
   static void refresh() {
 
     if (checkDisplayBufferChecksum()) {
@@ -92,7 +97,11 @@ public:
       // or we need to goto double buffering
     }
   }
+#endif
 
+#ifdef MODEL_TS101
+  static void setDisplayState(DisplayState state);
+#else
   static void setDisplayState(DisplayState state) {
     if (state != displayState) {
       displayState    = state;
@@ -102,6 +111,7 @@ public:
       osDelay(TICKS_10MS);
     }
   }
+#endif
 
   // Set the rotation for the screen
   static void setRotation(bool leftHanded);
