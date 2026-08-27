@@ -83,35 +83,10 @@ public:
   static void initialize(); // Startup the I2C coms (brings screen out of reset etc)
   static bool isInitDone();
   // Draw the buffer out to the LCD if any content has changed.
-#ifdef OLED_I2C_PER_BYTE_TRANSFERS
-  // This panel needs the per-byte command path (see OLED.cpp); the shared
-  // bulk Transmit() below leaves it stuck on a partial-screen refresh.
+  // (see OLED.cpp: OLED_I2C_PER_BYTE_TRANSFERS selects between the per-byte
+  // command path some panels need and the shared bulk Transmit() path)
   static void refresh();
-#else
-  static void refresh() {
-
-    if (checkDisplayBufferChecksum()) {
-      const int len = FRAMEBUFFER_START + (OLED_WIDTH * (OLED_HEIGHT / 8));
-      I2C_CLASS::Transmit(DEVICEADDR_OLED, screenBuffer, len);
-      // DMA tx time is ~ 20mS Ensure after calling this you delay for at least 25ms
-      // or we need to goto double buffering
-    }
-  }
-#endif
-
-#ifdef OLED_I2C_PER_BYTE_TRANSFERS
   static void setDisplayState(DisplayState state);
-#else
-  static void setDisplayState(DisplayState state) {
-    if (state != displayState) {
-      displayState    = state;
-      screenBuffer[1] = (state == ON) ? OLED_ON : OLED_OFF;
-      // Dump the screen state change out _now_
-      I2C_CLASS::Transmit(DEVICEADDR_OLED, screenBuffer, FRAMEBUFFER_START - 1);
-      osDelay(TICKS_10MS);
-    }
-  }
-#endif
 
   // Set the rotation for the screen
   static void setRotation(bool leftHanded);
@@ -150,20 +125,20 @@ public:
     drawSymbol((state) ? 16 : 17);
   }
   inline static void drawUnavailableIcon() { drawArea(OLED_WIDTH - OLED_HEIGHT - 2, 0, OLED_HEIGHT, OLED_HEIGHT, UnavailableIcon); }
-  static void debugNumber(int32_t val, FontStyle fontStyle);
-  static void drawHex(uint32_t x, FontStyle fontStyle, uint8_t digits);
-  static void drawSymbol(uint8_t symbolID);                                                           // Used for drawing symbols of a predictable width
-  static void drawArea(int16_t x, int8_t y, uint8_t wide, uint8_t height, const uint8_t *ptr);        // Draw an area, but y must be aligned on 0/8 offset
-  static void drawAreaSwapped(int16_t x, int8_t y, uint8_t wide, uint8_t height, const uint8_t *ptr); // Draw an area, but y must be aligned on 0/8 offset
-  static void fillArea(int16_t x, int8_t y, uint8_t wide, uint8_t height, const uint8_t value);       // Fill an area, but y must be aligned on 0/8 offset
-  static void drawFilledRect(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, bool clear);
-  static void drawHeatSymbol(uint8_t state);
-  static void drawScrollIndicator(uint8_t p, uint8_t h); // Draws a scrolling position indicator
-  static void maskScrollIndicatorOnOLED();
-  static void transitionSecondaryFramebuffer(const bool forwardNavigation, const TickType_t viewEnterTime);
-  static void useSecondaryFramebuffer(bool useSecondary);
-  static void transitionScrollDown(const TickType_t viewEnterTime);
-  static void transitionScrollUp(const TickType_t viewEnterTime);
+  static void        debugNumber(int32_t val, FontStyle fontStyle);
+  static void        drawHex(uint32_t x, FontStyle fontStyle, uint8_t digits);
+  static void        drawSymbol(uint8_t symbolID);                                                           // Used for drawing symbols of a predictable width
+  static void        drawArea(int16_t x, int8_t y, uint8_t wide, uint8_t height, const uint8_t *ptr);        // Draw an area, but y must be aligned on 0/8 offset
+  static void        drawAreaSwapped(int16_t x, int8_t y, uint8_t wide, uint8_t height, const uint8_t *ptr); // Draw an area, but y must be aligned on 0/8 offset
+  static void        fillArea(int16_t x, int8_t y, uint8_t wide, uint8_t height, const uint8_t value);       // Fill an area, but y must be aligned on 0/8 offset
+  static void        drawFilledRect(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, bool clear);
+  static void        drawHeatSymbol(uint8_t state);
+  static void        drawScrollIndicator(uint8_t p, uint8_t h); // Draws a scrolling position indicator
+  static void        maskScrollIndicatorOnOLED();
+  static void        transitionSecondaryFramebuffer(const bool forwardNavigation, const TickType_t viewEnterTime);
+  static void        useSecondaryFramebuffer(bool useSecondary);
+  static void        transitionScrollDown(const TickType_t viewEnterTime);
+  static void        transitionScrollUp(const TickType_t viewEnterTime);
 
 private:
   static bool checkDisplayBufferChecksum() {
