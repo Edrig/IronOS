@@ -231,6 +231,10 @@
 #define OLED_I2C_PER_BYTE_TRANSFERS 1
 // This panel needs a non-zero, orientation-dependent SSD1306 vertical Display
 // Offset (0xD3); without it the image renders shifted by half the screen height.
+// The exact correct offset/segment-remap pairing differs between real TS101
+// units (confirmed via two different hardware samples), so the actual bytes are
+// detected at runtime from the stock bootloader's own init table rather than
+// hardcoded here; see detectOledOffsetFromBootloader() in OLED.cpp.
 #define OLED_DISPLAY_OFFSET_QUIRK 1
 
 #endif /* TS101 */

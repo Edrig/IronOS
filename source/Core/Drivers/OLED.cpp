@@ -42,16 +42,12 @@ I2C_CLASS::I2C_REG OLED_Setup_Array[] = {
     {0x80,  OLED_HEIGHT - 1, 0}, /* Multiplex ratio adjusts how far down the matrix it scans */
     {0x80,             0xC0, 0}, /* Set COM Scan direction */
     {0x80,             0xD3, 0}, /* Set vertical Display offset */
-#ifdef OLED_DISPLAY_OFFSET_QUIRK
-    {0x80,             0x30, 0}, /* Offset (this panel needs a non-zero offset; see setRotation) */
-#else
-    {0x80, 0x00, 0}, /* 0 Offset */
-#endif
+    {0x80,             0x00, 0}, /* Offset; overwritten at runtime for OLED_DISPLAY_OFFSET_QUIRK, see initialize() */
     {0x80,             0x40, 0}, /* Set Display start line to 0 */
 #if defined(OLED_SEGMENT_MAP_REVERSED) && !defined(OLED_DISPLAY_OFFSET_QUIRK)
     {0x80,             0xA1, 0}, /* Set Segment remap (reversed) */
 #else
-    {0x80, 0xA0, 0}, /* Set Segment remap to normal */
+    {0x80, 0xA0, 0}, /* Set Segment remap to normal; overwritten at runtime for OLED_DISPLAY_OFFSET_QUIRK */
 #endif
     {0x80,             0x8D, 0}, /* Charge Pump */
     {0x80,             0x14, 0}, /* Charge Pump settings */
@@ -70,6 +66,34 @@ I2C_CLASS::I2C_REG OLED_Setup_Array[] = {
     {0x80,          OLED_ON, 0}, /* Display on */
 };
 // Setup based on the SSD1307 and modified for the SSD1306
+
+#ifdef OLED_DISPLAY_OFFSET_QUIRK
+// The stock TS101 bootloader (never overwritten by IronOS) contains its own SSD1306
+// init table with the correct per-unit segment-remap and vertical-offset bytes,
+// fixed at the factory. Real units differ here: some need offset 0x10 with reversed
+// remap, others need offset 0x00 with normal remap (confirmed on hardware; see
+// Ralim/IronOS PR #2238). Rather than hardcoding one value for every TS101, read the
+// actual bytes the bootloader itself uses, by scanning for a short anchor sequence
+// unique to that table (segment-remap, "normal display", multiplex ratio, COM-scan,
+// then the display-offset command byte, in that fixed relative order) since the
+// table's absolute address varies between bootloader versions/builds.
+static uint8_t oledDetectedSegmentRemap = 0xA0; // safe default: normal remap, no offset
+static uint8_t oledDetectedDisplayOffset = 0x00;
+
+static void detectOledOffsetFromBootloader() {
+  static const uint8_t anchor[] = {0xA6, 0xA8, 0x1F, 0xC8, 0xD3};
+  const uint8_t       *bootloader     = reinterpret_cast<const uint8_t *>(0x08000000);
+  const uint32_t       bootloaderSize = 0x8000; // TS101 bootldr_size, see source/Makefile
+  for (uint32_t i = 1; i + sizeof(anchor) < bootloaderSize; i++) {
+    if (memcmp(bootloader + i, anchor, sizeof(anchor)) == 0) {
+      oledDetectedSegmentRemap  = bootloader[i - 1];
+      oledDetectedDisplayOffset = bootloader[i + sizeof(anchor)];
+      return;
+    }
+  }
+  // Anchor not found: keep the safe defaults set above.
+}
+#endif /* OLED_DISPLAY_OFFSET_QUIRK */
 
 const uint8_t REFRESH_COMMANDS[17] = {
     // Set display ON:
@@ -183,6 +207,15 @@ void OLED::initialize() {
   cursor_x = cursor_y = 0;
   inLeftHandedMode    = false;
 
+#ifdef OLED_DISPLAY_OFFSET_QUIRK
+  // Detect now, but do NOT poke OLED_Setup_Array[7]/[9] here: sending the detected
+  // offset as part of the very first command sequence after power-up hangs on real
+  // hardware (confirmed), even though the exact same byte sent later via
+  // setRotation() does not. So the initial send below keeps its compiled-in
+  // defaults, and setRotation() is force-applied right after, further down.
+  detectOledOffsetFromBootloader();
+#endif
+
 #ifdef OLED_128x32
   stripPointers[0] = &screenBuffer[FRAMEBUFFER_START];
   stripPointers[1] = &screenBuffer[FRAMEBUFFER_START + OLED_WIDTH];
@@ -217,6 +250,16 @@ void OLED::initialize() {
 #endif /* OLED_I2C_PER_BYTE_TRANSFERS */
   setDisplayState(DisplayState::ON);
   initDone = true;
+#ifdef OLED_DISPLAY_OFFSET_QUIRK
+  // Apply the detected per-unit remap/offset now, via the same mechanism already
+  // proven safe on real hardware (setRotation), rather than as part of the initial
+  // power-up sequence above. Force it to actually run once by temporarily marking
+  // the opposite mode as "current", since setRotation() no-ops when the requested
+  // mode already matches; the caller's real orientation request (moments later)
+  // will then correctly transition away from this if needed.
+  inLeftHandedMode = true;
+  setRotation(false);
+#endif
 }
 
 void OLED::setFramebuffer(uint8_t *buffer) {
@@ -600,18 +643,19 @@ void OLED::setRotation(bool leftHanded) {
   }
 #ifdef OLED_DISPLAY_OFFSET_QUIRK
   // Segment-remap, COM-scan-direction and vertical Display-Offset (0xD3) as a matched
-  // triplet, taken from the official Miniware TS101 firmware disassembly: on this
-  // panel, changing orientation without also re-sending the Display-Offset leaves the
-  // image shifted by half the screen height.
-  if (leftHanded) {
-    OLED_Setup_Array[9].val = 0xA1;
-    OLED_Setup_Array[5].val = 0xC8;
-    OLED_Setup_Array[7].val = 0x10;
-  } else {
-    OLED_Setup_Array[9].val = 0xA0;
-    OLED_Setup_Array[5].val = 0xC0;
-    OLED_Setup_Array[7].val = 0x30;
+  // triplet: changing orientation without also re-sending the Display-Offset leaves the
+  // image shifted by half the screen height. The offset byte detected from the
+  // bootloader (see detectOledOffsetFromBootloader()) is only valid for the
+  // segment-remap it was paired with; the other orientation needs it toggled by half
+  // the panel height (0x20), matching the relationship observed on real hardware.
+  uint8_t remap = leftHanded ? 0xA1 : 0xA0;
+  uint8_t offset = oledDetectedDisplayOffset;
+  if (remap != oledDetectedSegmentRemap) {
+    offset ^= 0x20;
   }
+  OLED_Setup_Array[9].val = remap;
+  OLED_Setup_Array[5].val = leftHanded ? 0xC8 : 0xC0;
+  OLED_Setup_Array[7].val = offset;
 #else
 #ifdef OLED_SEGMENT_MAP_REVERSED
   if (!leftHanded) {
